@@ -8,7 +8,7 @@
 - Лицензия: CC0 1.0: https://creativecommons.org/publicdomain/zero/1.0/
 - Получено из GitHub-репозитория `ruralive/ruralive-models`, подтверждающего источник и лицензию: https://github.com/ruralive/ruralive-models/blob/36e72c6057f31c81325215c46e11d552b0429fee/CREDITS.md
 - Файл: https://github.com/ruralive/ruralive-models/blob/36e72c6057f31c81325215c46e11d552b0429fee/models/shrub_02.glb
-- Локальная копия `polyhaven/shrub_02.glb`, SHA-256 `fffb8218d61d11a22da2cba0e6ca8baf2bada017c29d3f7d6744e6f5a675b8f2`. Из набора используются экземпляры первого объекта, с равномерным уменьшением до приблизительной ширины 0,68 м по существующим девяти условным маркерам.
+- Локальная копия `polyhaven/shrub_02.glb`, SHA-256 `fffb8218d61d11a22da2cba0e6ca8baf2bada017c29d3f7d6744e6f5a675b8f2`. Из набора используются экземпляры первого объекта, с равномерным уменьшением до приблизительной ширины 0,68 м по существующим девяти условным центральным маркерам теста этапа 3; в тесте этапа 4 — по 26 условным маркерам, с шириной 0,68 или 0,84 м.
 
 ## Paving Stones 002
 

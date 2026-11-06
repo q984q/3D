@@ -1,0 +1,273 @@
+"""Partial reconstruction from the user's PDF. Provisional, not recovered v5."""
+from pathlib import Path
+import fitz
+import numpy as np
+from PIL import Image
+from shapely.geometry import box, Polygon
+from shapely import set_precision, from_wkb, to_wkb
+import json
+from shapely.ops import unary_union
+import trimesh
+from trimesh.visual.texture import TextureVisuals
+R=Path(__file__).resolve().parent.parent
+p=fitz.open(str(next((R/'source').glob('*.pdf'))))[0]
+W,H=1568,1109
+# Rasterized orientation is the orientation shown on the original page.
+pix=p.get_pixmap(matrix=fitz.Matrix(W/p.rect.width,H/p.rect.height),alpha=False)
+img=Image.frombytes('RGB',(pix.width,pix.height),pix.samples).resize((W,H))
+img.save(R/'public/model/plan_underlay.png',optimize=True)
+paths={d['seqno']:d for d in p.get_drawings()}; rot=p.rotation_matrix
+# image coordinate -> local metric XY; 12.44 px/m is the earlier multi-dimension calibration.
+def norm(point):
+ q=fitz.Point(point)*rot
+ return (q.x*W/p.rect.width,q.y*H/p.rect.height)
+def world(point):
+ x,y=norm(point);return (x/12.44,(H-y)/12.44)
+def rect(seq):
+ r=paths[seq]['rect']; pts=[world((r.x0,r.y0)),world((r.x0,r.y1)),world((r.x1,r.y0)),world((r.x1,r.y1))]
+ return box(min(x for x,y in pts),min(y for x,y in pts),max(x for x,y in pts),max(y for x,y in pts))
+def polylines(seq):
+ pts=[]
+ for item in paths[seq]['items']:
+  op=item[0]
+  if op=='l':
+   a,b=item[1:];
+   if not pts:pts.append(world(a))
+   pts.append(world(b))
+  elif op=='c':
+   a,b,c,d=[np.array(world(x)) for x in item[1:]]
+   if not pts:pts.append(tuple(a))
+   for t in np.linspace(0,1,25)[1:]:pts.append(tuple((1-t)**3*a+3*(1-t)**2*t*b+3*(1-t)*t*t*c+t**3*d))
+ return pts
+s=trimesh.Scene()
+def add(name,mesh,color=None):
+ if color is not None:mesh.visual.face_colors=color
+ s.add_geometry(mesh,geom_name=name,node_name=name)
+# embed raster as a texture on a horizontal XY quad.
+w,h=W/12.44,H/12.44
+v=np.array([[0,0,0],[w,0,0],[w,h,0],[0,h,0]],float)
+f=np.array([[0,1,2],[0,2,3]])
+# UV origin is bottom-left; image origin is top-left.
+uv=np.array([[0,0],[1,0],[1,1],[0,1]],float)
+plane=trimesh.Trimesh(vertices=v,faces=f,visual=TextureVisuals(uv=uv,image=img),process=False)
+add('REFERENCE_PDF_NOT_GEOMETRY',plane)
+# Rectangles are envelope proxies only, not measured architecture.
+groups=[[9051],[9054,9068],[9151],[9588,9600],[9691],[9661,9680]]
+building_geoms=[]
+for i,ids in enumerate(groups,1):
+ geom=unary_union([rect(x) for x in ids])
+ # Bounding rectangle for the pair 9588/9600, whose intermediates are not reconstructed.
+ if i==4:geom=box(*geom.bounds)
+ building_geoms.append(geom)
+ polys=list(geom.geoms) if hasattr(geom,'geoms') else [geom]
+ for j,poly in enumerate(polys,1):
+  mesh=trimesh.creation.extrude_polygon(poly,8.0);mesh.apply_translation((0,0,.02));add(f'BUILDING_{i:02d}_{j:02d}_ENVELOPE_HEIGHT_8M_CONDITIONAL',mesh,[155,160,159,255])
+outer=Polygon(polylines(39129)); inner=Polygon(polylines(39186))
+ring=outer.difference(inner)
+if not ring.is_valid:ring=ring.buffer(0)
+ring_mesh=trimesh.creation.extrude_polygon(ring,.10);ring_mesh.apply_translation((0,0,.02));add('CENTRAL_RING_CONDITIONAL_10CM',ring_mesh,[141,145,138,255])
+# Two simple MAF placeholders from visible outlined squares.
+for i,seq in enumerate((25669,25722),1):
+ mesh=trimesh.creation.extrude_polygon(rect(seq),.12);mesh.apply_translation((0,0,.02));add(f'PLAY_SYMBOL_{i:02d}_CONDITIONAL',mesh,[206,180,109,255])
+# PDF graphic fills are triangulated in groups of three line segments.
+# Only exact source colours/layers are selected, without guessing a construction.
+color_groups=[('GREEN_FILL','Штриховка_зелень',(218,243,211)),
+ ('PLAY_GREEN','ПОКР.ТИП-1',(99,159,20)),('PLAY_YELLOW','ПОКР.ТИП-1',(229,238,124)),
+ ('PLAY_PURPLE','ПОКР.ТИП-1',(90,22,148)),('PLAY_LILAC','ПОКР.ТИП-1',(207,166,242)),
+ ('PLAY_ORANGE','ПОКР.ТИП-1',(255,132,46)),('RIGHT_GREY','Штриховка_зелень',(147,149,152))]
+fills={};audit={}
+for name,layer,color in color_groups:
+ triangles=[];seqs=[]
+ for d in paths.values():
+  if d['layer']!=layer or d['fill'] is None or tuple(round(255*c) for c in d['fill'])!=color:continue
+  items=d['items']
+  if len(items)%3 or any(t[0]!='l' for t in items):continue
+  for i in range(0,len(items),3):
+   t=Polygon([world(item[1]) for item in items[i:i+3]])
+   if t.is_valid and t.area>1e-8:triangles.append(t)
+  seqs.append(d['seqno'])
+ if not triangles:raise ValueError(name)
+ # Preserve original vector triangle boundaries: small discrepancies between
+ # neighbouring PDF fragments do not justify inventing missing material.
+ verts=[];faces=[]
+ for poly in triangles:
+  coords=list(poly.exterior.coords)[:3];start=len(verts)
+  if not poly.exterior.is_ccw:coords.reverse()
+  verts.extend([(x,y,.025) for x,y in coords]);faces.append((start,start+1,start+2))
+ mesh=trimesh.Trimesh(vertices=verts,faces=faces,process=False)
+ add('PDF_FILL_'+name+'_MATERIAL_UNCONFIRMED',mesh,[*color,255])
+ fills[name]=unary_union([set_precision(t,.0001) for t in triangles])
+ audit[name]={'pdf_layer':layer,'rgb':color,'source_seqnos':seqs,'triangle_count':len(triangles),'union_area_m2':fills[name].area}
+# Curbs / planter edging: paired PDF contours; provisional 0.10 m height.
+curb_pairs=[(99757,99758),(99759,99760),(99761,99762),(99763,99764),(99765,99766),(99767,99768),(99769,99772),(99770,99771),(99888,99889),(99890,99891),(99892,99893),(99894,99895),(99896,99897)]
+bed_pairs=[(1125,1198),(1199,1200),(1201,1202),(1204,1206),(14597,14598),(14575,14576),(39218,39225)]
+def path_points(seq):
+ d=paths[seq]
+ if len(d['items'])==1 and d['items'][0][0]=='qu':
+  q=d['items'][0][1];return [world(q.ul),world(q.ur),world(q.lr),world(q.ll),world(q.ul)]
+ return polylines(seq)
+def paired_polygon(a,b):
+ A=path_points(a);B=path_points(b)
+ if np.linalg.norm(np.array(A[0])-A[-1])<.001 and np.linalg.norm(np.array(B[0])-B[-1])<.001:
+  p,q=Polygon(A),Polygon(B)
+  if p.area<q.area:p,q=q,p
+  return p.difference(q)
+ # Match the closer pair of endpoints before connecting; small ends are assumed.
+ if np.linalg.norm(np.array(A[-1])-B[0])+np.linalg.norm(np.array(A[0])-B[-1]) > np.linalg.norm(np.array(A[-1])-B[-1])+np.linalg.norm(np.array(A[0])-B[0]):B=B[::-1]
+ return Polygon(A+B)
+edge_geoms=[];edge_audit=[]
+for prefix,pairs in [('CURB',curb_pairs),('BED_EDGE',bed_pairs)]:
+ for i,(a,b) in enumerate(pairs,1):
+  poly=paired_polygon(a,b)
+  repaired=not poly.is_valid
+  if repaired:poly=poly.buffer(0)
+  poly=set_precision(poly,.001)
+  if edge_geoms:poly=poly.difference(unary_union(edge_geoms))
+  chunks=list(poly.geoms) if poly.geom_type=='MultiPolygon' else [poly]
+  saved=[]
+  for j,g in enumerate(chunks,1):
+   if not isinstance(g,Polygon) or g.area<.0001:continue
+   mesh=trimesh.creation.extrude_polygon(g,.10)
+   if not mesh.is_watertight:
+    # Skip questionable components rather than silently assert a valid solid.
+    continue
+   mesh.apply_translation((0,0,.02));add(f'{prefix}_{i:02d}_{j:02d}_HEIGHT_CONDITIONAL',mesh,[150,148,140,255]);saved.append(g);edge_geoms.append(g)
+  edge_audit.append({'kind':prefix,'seqnos':[a,b],'repaired':repaired,'components_saved':len(saved),'area_m2':sum(x.area for x in saved)})
+# Last rounded bed boundary consists of two line/curve pairs; close their
+# short joins, repair small source self-intersections and remove shared edges.
+raw_outer=Polygon(polylines(39189)+polylines(39190))
+raw_inner=Polygon(polylines(39216)+polylines(39217))
+rounded=set_precision(raw_outer.buffer(0).difference(raw_inner.buffer(0)),.001)
+rounded=rounded.difference(unary_union(edge_geoms))
+parts=[rounded] if rounded.geom_type=='Polygon' else list(rounded.geoms)
+saved=[]
+for i,part in enumerate(parts,1):
+ if not isinstance(part,Polygon) or part.area<.0001:continue
+ mesh=trimesh.creation.extrude_polygon(part,.10)
+ if not mesh.is_watertight:continue
+ mesh.apply_translation((0,0,.02));add(f'BED_EDGE_08_{i:02d}_HEIGHT_CONDITIONAL',mesh,[150,148,140,255]);edge_geoms.append(part);saved.append(part)
+edge_audit.append({'kind':'BED_EDGE','seqnos':[[39189,39190],[39216,39217]],'repaired':True,'components_saved':len(saved),'area_m2':sum(g.area for g in saved)})
+audit['edge_pairs']=edge_audit
+
+# Central area formed from the three source boundary fragments. Two ends have
+# small drawing gaps; joins are straight and explicitly recorded in the report.
+central=Polygon(polylines(47085)+list(reversed(polylines(47086)))+polylines(47087))
+assert central.is_valid, 'Central polygon requires manual review'
+mask=unary_union([ring]+edge_geoms+list(fills.values()))
+central=central.difference(mask)
+for i,poly in enumerate((central.geoms if central.geom_type=='MultiPolygon' else [central]),1):
+ if poly.area<.01:continue
+ # The base is an assumed thin preview surface; cannot be used as construction.
+ m=trimesh.creation.extrude_polygon(poly,.015)
+ if not m.is_watertight:
+  # Drop fixed precision before a 0.1 mm inset at point-touching boundaries.
+  clean=from_wkb(to_wkb(poly)).buffer(-.0001)
+  pieces=[clean] if clean.geom_type=='Polygon' else [g for g in clean.geoms if g.geom_type=='Polygon' and g.area>1e-6]
+  if not pieces:raise ValueError('Inset erased a central paving part')
+  m=trimesh.util.concatenate([trimesh.creation.extrude_polygon(piece,.015) for piece in pieces])
+  if not m.is_watertight:raise ValueError('Non-watertight central paving after inset')
+  audit.setdefault('central_topology_insets_0_1mm',[]).append(i)
+ m.apply_translation((0,0,.005));add(f'CENTRAL_PAVING_PART_{i:02d}_CONDITIONAL',m,[194,178,152,255])
+audit['central']={'boundary_seqnos':[47085,47086,47087], 'joins':'47086 reversed, small gaps bridged', 'area_after_fill_exclusions_m2':central.area,'thickness_m_conditional':.015}
+# A *partial* courtyard surface: follow known vector boundaries and bridge a
+# deliberately artificial straight seam at x=491.18 px. Not a project boundary.
+field_line=polylines(14563);curve=list(reversed(polylines(14564)));edge_start=polylines(47087)[0]
+seam_end=(field_line[0][0],edge_start[1])
+field_outer=Polygon(field_line+curve+[edge_start,seam_end])
+assert field_outer.is_valid,'Partial field boundary needs manual review'
+field_mask=unary_union([central,ring]+edge_geoms+list(fills.values())+building_geoms)
+field=field_outer.difference(field_mask)
+field_parts=list(field.geoms) if hasattr(field,'geoms') else [field];field_saved=[];insets=[]
+for i,part in enumerate(field_parts,1):
+ if not isinstance(part,Polygon) or part.area<.01:continue
+ mesh=trimesh.creation.extrude_polygon(part,.015)
+ if not mesh.is_watertight:
+  clean=from_wkb(to_wkb(part)).buffer(-.0001)
+  pieces=[clean] if clean.geom_type=='Polygon' else [g for g in clean.geoms if g.geom_type=='Polygon' and g.area>1e-6]
+  if not pieces:raise ValueError('Inset erased field component')
+  mesh=trimesh.util.concatenate([trimesh.creation.extrude_polygon(p,.015) for p in pieces]);insets.append(i)
+ if not mesh.is_watertight:raise ValueError('Non-watertight field component')
+ mesh.apply_translation((0,0,.005));add(f'COURTYARD_PARTIAL_SURFACE_{i:02d}_INFERRED_SEAM_CONDITIONAL',mesh,[164,163,155,255]);field_saved.append(i)
+audit['courtyard_partial']={'boundary_seqnos':[14563,14564,47087],'artificial_seam_px':[[field_line[0][0]*12.44,H-field_line[0][1]*12.44],[seam_end[0]*12.44,H-seam_end[1]*12.44]],'outer_area_m2':field_outer.area,'after_selected_exclusions_m2':field.area,'saved_component_indices':field_saved,'insets_0_1mm':insets,'thickness_m_conditional':.015}
+# Nine generic, low markers at visible symbols inside the central circular bed.
+# They indicate placement only; botanical identity and sizes are not supplied.
+central_markers=[(667,299),(642,312),(693,312),(632,335),(667,335),(703,335),(642,361),(693,361),(667,371)]
+from shapely.geometry import Point
+for i,(px,py) in enumerate(central_markers,1):
+ x,y=px/12.44,(H-py)/12.44
+ pt=Point(x,y)
+ assert fills['GREEN_FILL'].covers(pt) and inner.contains(pt),f'Central plant {i} outside selected green circle'
+ shrub=trimesh.creation.icosphere(subdivisions=2,radius=1);shrub.apply_scale([.34,.34,.28]);shrub.apply_translation((x,y,.30))
+ add(f'CENTRAL_PLANT_SYMBOL_{i:02d}_TYPE_AND_HEIGHT_CONDITIONAL',shrub,[110,151,88,255])
+audit['central_plant_symbols']={'centers_in_normalized_image_pixels':central_markers,'radius_m_conditional':.34,'approx_height_m_conditional':.58}
+
+# Twelve additional visible planting marks in central beds. Placement is
+# approximate and the spherical meshes are replaceable visual locators only.
+bed_plant_pixels=[(610,257),(590,275),(724,257),(745,275),(590,397),(610,415),(745,397),(724,415),(590,445),(630,445),(704,445),(744,445)]
+for i,(px,py) in enumerate(bed_plant_pixels,1):
+ x,y=px/12.44,(H-py)/12.44;pt=Point(x,y)
+ assert fills['GREEN_FILL'].covers(pt) and fills['GREEN_FILL'].boundary.distance(pt)>.38
+ shrub=trimesh.creation.icosphere(subdivisions=2,radius=1);shrub.apply_scale([.34,.34,.28]);shrub.apply_translation((x,y,.30))
+ add(f'BED_PLANT_SYMBOL_{i:02d}_TYPE_AND_HEIGHT_CONDITIONAL',shrub,[110,151,88,255])
+audit['bed_plant_symbols']={'centers_in_normalized_image_pixels':bed_plant_pixels,'radius_m_conditional':.34,'height_m_conditional':.56}
+
+# Five extra generic low plant markers at visually legible symbols, not a
+# botanical plan. Their footprints fit within the selected green PDF fill.
+extra_plant_pixels=[(1132,309),(1132,357),(1132,407),(895,289),(966,289)]
+for i,(px,py) in enumerate(extra_plant_pixels,1):
+ x,y=px/12.44,(H-py)/12.44;pt=Point(x,y)
+ assert fills['GREEN_FILL'].covers(pt) and fills['GREEN_FILL'].boundary.distance(pt)>.45
+ shrub=trimesh.creation.icosphere(subdivisions=2,radius=1);shrub.apply_scale([.42,.42,.38]);shrub.apply_translation((x,y,.40))
+ add(f'EXTRA_PLANT_SYMBOL_{i:02d}_TYPE_AND_HEIGHT_CONDITIONAL',shrub,[105,145,87,255])
+audit['extra_plant_symbols']={'centers_in_normalized_image_pixels':extra_plant_pixels,'radius_m_conditional':.42,'height_m_conditional':.76}
+
+# Eight symbols with seat outlines on the plan, not vendor/product models.
+# The seat uses each original oriented quadrilateral; shape and 0.45m height
+# are conditional. Verify that the two low supports miss selected edge strips.
+bench_seqs=[33388,34218,35048,35878,36708,37468,38298,39128]
+bench_audit=[];all_edges=unary_union(edge_geoms+[ring])
+for i,seq in enumerate(bench_seqs,1):
+ quad=paths[seq]['items'][0][1]
+ coords=[np.array(world(q)) for q in (quad.ul,quad.ur,quad.lr,quad.ll)]
+ seat=Polygon(coords)
+ assert seat.is_valid and seat.area>0
+ vectors=[coords[1]-coords[0],coords[3]-coords[0]]
+ major=max(vectors,key=np.linalg.norm);length=np.linalg.norm(major);unit=major/length;center=np.array(seat.centroid.coords[0])
+ top=trimesh.creation.extrude_polygon(seat,.06);top.apply_translation((0,0,.39));top.visual.face_colors=[143,102,66,255]
+ supports=[];feet=[]
+ for d in (-.28,.28):
+  pos=center+unit*length*d;foot=Point(*pos).buffer(.05)
+  assert seat.covers(foot) and foot.intersection(all_edges).area<1e-7,(seq,d)
+  leg=trimesh.creation.cylinder(radius=.05,height=.37,sections=10);leg.apply_translation((pos[0],pos[1],.205));leg.visual.face_colors=[73,73,70,255]
+  supports.append(leg);feet.append(pos.tolist())
+ bench=trimesh.util.concatenate([top]+supports)
+ add(f'BENCH_SYMBOL_{i:02d}_PDF_QUAD_HEIGHT_AND_DESIGN_CONDITIONAL',bench)
+ bench_audit.append({'source_seqno':seq,'length_m_from_quad':length,'center_m':center.tolist(),'support_centers_m_conditional':feet,'height_m_conditional':.45})
+audit['bench_symbols']=bench_audit
+
+# The E_Light layer identifies circle symbols, not the lamp model or design.
+# A small upright marker is a visual locator only, not a lighting specification.
+light_seqs=[14477,14481,14485,14489,14493,14497,63612,63616,63620,63624,63628,63632,63636,63640,63644,63648,63652,64244,64248,64485,64489,64493,64497,64501]
+light_audit=[]
+for i,seq in enumerate(light_seqs,1):
+ rect=paths[seq]['rect'];pos=world(((rect.x0+rect.x1)/2,(rect.y0+rect.y1)/2));foot=Point(*pos).buffer(.06)
+ assert foot.intersection(all_edges).area<1e-7,(seq,'edge intersection')
+ pole=trimesh.creation.cylinder(radius=.045,height=.88,sections=10);pole.apply_translation((pos[0],pos[1],.46));pole.visual.face_colors=[95,100,98,255]
+ cap=trimesh.creation.cylinder(radius=.10,height=.12,sections=12);cap.apply_translation((pos[0],pos[1],.96));cap.visual.face_colors=[199,195,176,255]
+ add(f'LIGHT_SYMBOL_{i:02d}_PDF_MARKER_NOT_FIXTURE',trimesh.util.concatenate([pole,cap]));light_audit.append({'source_seqno':seq,'center_m':list(pos),'marker_height_m_conditional':1.02})
+audit['light_symbols']=light_audit
+
+# Approximate centers from repeated, visible tree symbols on the two streets.
+# The morphology and height are solely neutral placeholders, not a species choice.
+tree_pixels=[(34,996),(99,996),(163,996),(230,996),(301,996),(365,996),(428,996),(490,996),(552,996),(615,996),(676,996),(801,996),(863,996),(926,996),(988,996),(1054,996),(1148,996),(1210,996),(1273,996),(1335,996),(1397,996),(1459,996)]+[(1474,y) for y in (328,392,452,514,578,639,700,765,827,889)]
+for i,(px,py) in enumerate(tree_pixels,1):
+ x,y=px/12.44,(H-py)/12.44
+ trunk=trimesh.creation.cylinder(radius=.10,height=1.4,sections=10);trunk.apply_translation((x,y,.72));trunk.visual.face_colors=[103,83,61,255]
+ crown=trimesh.creation.icosphere(subdivisions=2,radius=1);crown.apply_scale([1.1,1.1,1.0]);crown.apply_translation((x,y,2.05));crown.visual.face_colors=[87,137,74,255]
+ tree=trimesh.util.concatenate([trunk,crown]);add(f'TREE_SYMBOL_{i:02d}_LOCATION_APPROX_HEIGHT_AND_TYPE_CONDITIONAL',tree)
+audit['tree_symbols']={'count':len(tree_pixels),'centers_in_normalized_image_pixels':tree_pixels,'crown_radius_m_conditional':1.1,'approx_height_m_conditional':3.05}
+(R/'public/model/reconstruction_04_audit.json').write_text(json.dumps(audit,ensure_ascii=False,indent=2))
+# Blender's Z-up to glTF Y-up conversion.
+s.apply_transform(trimesh.transformations.rotation_matrix(-np.pi/2,[1,0,0]))
+out=R/'public/model/palladium_reconstruction_04.glb';s.export(out)
+print('Saved',out,'nodes',len(s.graph.nodes_geometry),'bounds',s.bounds.tolist())

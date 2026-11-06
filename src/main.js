@@ -31,27 +31,29 @@ function setLayers(){
   if(!o.isMesh)return;
   if(o.name.startsWith('REFERENCE_PDF'))o.visible=checked('reference');
   if(o.name.startsWith('TREE_SYMBOL_'))o.visible=showPlants;
+  if(o.name.startsWith('EXTRA_PLANT_')||o.name.startsWith('BED_PLANT_'))o.visible=showPlants && !detailsReady;
+  if(o.name.startsWith('BENCH_SYMBOL_')||o.name.startsWith('LIGHT_SYMBOL_'))o.visible=checked('furniture');
   if(o.name.startsWith('CENTRAL_PLANT_'))o.visible=showPlants && !detailsReady;
   if(o.name.startsWith('COURTYARD_PARTIAL_'))o.visible=checked('field');
   if(o.name.startsWith('CENTRAL_PAVING_') && originals.has(o)) o.material=checked('realPaving') && pavingMaterial ? pavingMaterial : originals.get(o);
  });
  if(detailedPlants)detailedPlants.visible=showPlants && detailsReady;
 }
-for(const id of ['reference','trees','field'])document.getElementById(id).addEventListener('change',setLayers);
+for(const id of ['reference','trees','field','furniture'])document.getElementById(id).addEventListener('change',setLayers);
 function loadPlants(){
  if(plantPromise)return plantPromise;
  plantPromise=new GLTFLoader().loadAsync('/assets/polyhaven/shrub_02.glb').then(g=>{
   // The source GLB is a cluster of four bushes. Use just its first component.
   const template=g.scene.children[0];
   if(!template)throw new Error('Plant asset has no component');
-  const group=new THREE.Group();group.name='PREVIEW_ONLY_NINE_UNCONFIRMED_PLANTS';
+  const group=new THREE.Group();group.name='PREVIEW_ONLY_PLANTS_UNCONFIRMED';
   const centers=[];
   model.updateMatrixWorld(true);
   model.traverse(o=>{
-   if(o.isMesh&&o.name.startsWith('CENTRAL_PLANT_'))centers.push(new THREE.Box3().setFromObject(o).getCenter(new THREE.Vector3()));
+   if(o.isMesh&&(o.name.startsWith('CENTRAL_PLANT_')||o.name.startsWith('EXTRA_PLANT_')||o.name.startsWith('BED_PLANT_')))centers.push({position:new THREE.Box3().setFromObject(o).getCenter(new THREE.Vector3()),diameter:o.name.startsWith('EXTRA_PLANT_')?.84:.68});
   });
-  if(centers.length!==9)throw new Error('Expected nine central plant markers');
-  for(const pos of centers)group.add(createPlantPreview(template,pos));
+  if(centers.length!==26)throw new Error('Expected twenty-six plant markers');
+  for(const item of centers)group.add(createPlantPreview(template,item.position,item.diameter));
   scene.add(group);detailedPlants=group;setLayers();
  }).catch(e=>{plantPromise=undefined;throw e});
  return plantPromise;
@@ -79,7 +81,7 @@ async function handlePreview(id,load){
 }
 document.getElementById('realPlants').addEventListener('change',()=>handlePreview('realPlants',loadPlants));
 document.getElementById('realPaving').addEventListener('change',()=>handlePreview('realPaving',loadPaving));
-new GLTFLoader().load('/model/palladium_reconstruction_03.glb',g=>{
+new GLTFLoader().load('/model/palladium_reconstruction_04.glb',g=>{
  model=g.scene;model.traverse(o=>{if(o.isMesh&&o.name.startsWith('REFERENCE_PDF'))o.material=new THREE.MeshBasicMaterial({map:o.material.map,side:THREE.DoubleSide});});
  scene.add(model);setLayers();notify('');
 },undefined,e=>{console.error(e);notify('Не удалось загрузить модель. Обновите страницу.')});
