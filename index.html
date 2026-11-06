@@ -3,7 +3,7 @@
 <head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Паладиум — просмотр модели</title></head>
 <body>
 <div id="app">
-  <header><div><strong>Паладиум</strong><span>Восстановление · этап 3</span></div><a href="/model/palladium_reconstruction_03.glb" download>Скачать GLB ↓</a></header>
+  <header><div><strong>Паладиум</strong><span>Рабочая модель · визуальный тест</span></div><a href="/model/palladium_reconstruction_03.glb" download>Скачать GLB ↓</a></header>
   <main>
     <div id="viewport"></div>
     <div class="panel">
@@ -13,6 +13,12 @@
         <button id="axon" class="active">Общий вид</button><button id="top">Сверху</button><button id="courtyard">Двор</button><button id="playground">Детская</button><button id="centre">Центр</button><button id="shevchenko">Шевченко</button><button id="sharipova">Шарипова</button>
       </div>
       <div class="layers"><label><input type="checkbox" id="reference" checked> Подложка PDF</label><label><input type="checkbox" id="trees" checked> Условные растения</label><label><input type="checkbox" id="field" checked> Поверхность двора (условная)</label></div>
+      <div class="lookdev">
+        <strong>Тест реалистичности</strong>
+        <label><input type="checkbox" id="realPlants"> Модель растения Poly Haven</label>
+        <label><input type="checkbox" id="realPaving"> Текстура мощения ambientCG</label>
+        <small>Только для просмотра: виды, материалы и размеры не подтверждены планом. Тест не меняет скачиваемую модель.</small>
+      </div>
       <div class="help">Потяните для вращения · колесо для масштаба · правая кнопка для перемещения</div>
       <div class="warning">Здания, растения и часть поверхности двора условны. Часть плана ещё остаётся изображением на подложке.</div>
     </div>
