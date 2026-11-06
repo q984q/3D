@@ -19,8 +19,8 @@ function preset(name){const p=presets[name];controls.target.set(...p.target);cam
 for(const name of Object.keys(presets))document.getElementById(name).onclick=()=>preset(name);
 preset('axon');
 let model;
-function setLayers(){if(!model)return;model.traverse(o=>{if(o.isMesh&&o.name.startsWith('REFERENCE_PDF'))o.visible=document.querySelector('#reference').checked;if(o.isMesh&&o.name.startsWith('TREE_SYMBOL_'))o.visible=document.querySelector('#trees').checked;})}
-for(const id of ['reference','trees'])document.getElementById(id).addEventListener('change',setLayers);
-new GLTFLoader().load('/model/palladium_reconstruction_02.glb',g=>{model=g.scene;model.traverse(o=>{if(o.isMesh&&o.name.startsWith('REFERENCE_PDF'))o.material=new THREE.MeshBasicMaterial({map:o.material.map,side:THREE.DoubleSide});});scene.add(model);setLayers();status.remove()},undefined,e=>{console.error(e);status.textContent='Не удалось загрузить модель. Обновите страницу.'});
+function setLayers(){if(!model)return;model.traverse(o=>{if(o.isMesh&&o.name.startsWith('REFERENCE_PDF'))o.visible=document.querySelector('#reference').checked;if(o.isMesh&&(o.name.startsWith('TREE_SYMBOL_')||o.name.startsWith('CENTRAL_PLANT_')))o.visible=document.querySelector('#trees').checked;if(o.isMesh&&o.name.startsWith('COURTYARD_PARTIAL_'))o.visible=document.querySelector('#field').checked;})}
+for(const id of ['reference','trees','field'])document.getElementById(id).addEventListener('change',setLayers);
+new GLTFLoader().load('/model/palladium_reconstruction_03.glb',g=>{model=g.scene;model.traverse(o=>{if(o.isMesh&&o.name.startsWith('REFERENCE_PDF'))o.material=new THREE.MeshBasicMaterial({map:o.material.map,side:THREE.DoubleSide});});scene.add(model);setLayers();status.remove()},undefined,e=>{console.error(e);status.textContent='Не удалось загрузить модель. Обновите страницу.'});
 function resize(){const w=view.clientWidth,h=view.clientHeight;camera.aspect=w/h;camera.updateProjectionMatrix();renderer.setSize(w,h)}window.addEventListener('resize',resize);
 renderer.setAnimationLoop(()=>{controls.update();renderer.render(scene,camera)});

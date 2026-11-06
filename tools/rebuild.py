@@ -53,10 +53,12 @@ plane=trimesh.Trimesh(vertices=v,faces=f,visual=TextureVisuals(uv=uv,image=img),
 add('REFERENCE_PDF_NOT_GEOMETRY',plane)
 # Rectangles are envelope proxies only, not measured architecture.
 groups=[[9051],[9054,9068],[9151],[9588,9600],[9691],[9661,9680]]
+building_geoms=[]
 for i,ids in enumerate(groups,1):
  geom=unary_union([rect(x) for x in ids])
  # Bounding rectangle for the pair 9588/9600, whose intermediates are not reconstructed.
  if i==4:geom=box(*geom.bounds)
+ building_geoms.append(geom)
  polys=list(geom.geoms) if hasattr(geom,'geoms') else [geom]
  for j,poly in enumerate(polys,1):
   mesh=trimesh.creation.extrude_polygon(poly,8.0);mesh.apply_translation((0,0,.02));add(f'BUILDING_{i:02d}_{j:02d}_ENVELOPE_HEIGHT_8M_CONDITIONAL',mesh,[155,160,159,255])
@@ -131,6 +133,20 @@ for prefix,pairs in [('CURB',curb_pairs),('BED_EDGE',bed_pairs)]:
     continue
    mesh.apply_translation((0,0,.02));add(f'{prefix}_{i:02d}_{j:02d}_HEIGHT_CONDITIONAL',mesh,[150,148,140,255]);saved.append(g);edge_geoms.append(g)
   edge_audit.append({'kind':prefix,'seqnos':[a,b],'repaired':repaired,'components_saved':len(saved),'area_m2':sum(x.area for x in saved)})
+# Last rounded bed boundary consists of two line/curve pairs; close their
+# short joins, repair small source self-intersections and remove shared edges.
+raw_outer=Polygon(polylines(39189)+polylines(39190))
+raw_inner=Polygon(polylines(39216)+polylines(39217))
+rounded=set_precision(raw_outer.buffer(0).difference(raw_inner.buffer(0)),.001)
+rounded=rounded.difference(unary_union(edge_geoms))
+parts=[rounded] if rounded.geom_type=='Polygon' else list(rounded.geoms)
+saved=[]
+for i,part in enumerate(parts,1):
+ if not isinstance(part,Polygon) or part.area<.0001:continue
+ mesh=trimesh.creation.extrude_polygon(part,.10)
+ if not mesh.is_watertight:continue
+ mesh.apply_translation((0,0,.02));add(f'BED_EDGE_08_{i:02d}_HEIGHT_CONDITIONAL',mesh,[150,148,140,255]);edge_geoms.append(part);saved.append(part)
+edge_audit.append({'kind':'BED_EDGE','seqnos':[[39189,39190],[39216,39217]],'repaired':True,'components_saved':len(saved),'area_m2':sum(g.area for g in saved)})
 audit['edge_pairs']=edge_audit
 
 # Central area formed from the three source boundary fragments. Two ends have
@@ -153,6 +169,38 @@ for i,poly in enumerate((central.geoms if central.geom_type=='MultiPolygon' else
   audit.setdefault('central_topology_insets_0_1mm',[]).append(i)
  m.apply_translation((0,0,.005));add(f'CENTRAL_PAVING_PART_{i:02d}_CONDITIONAL',m,[194,178,152,255])
 audit['central']={'boundary_seqnos':[47085,47086,47087], 'joins':'47086 reversed, small gaps bridged', 'area_after_fill_exclusions_m2':central.area,'thickness_m_conditional':.015}
+# A *partial* courtyard surface: follow known vector boundaries and bridge a
+# deliberately artificial straight seam at x=491.18 px. Not a project boundary.
+field_line=polylines(14563);curve=list(reversed(polylines(14564)));edge_start=polylines(47087)[0]
+seam_end=(field_line[0][0],edge_start[1])
+field_outer=Polygon(field_line+curve+[edge_start,seam_end])
+assert field_outer.is_valid,'Partial field boundary needs manual review'
+field_mask=unary_union([central,ring]+edge_geoms+list(fills.values())+building_geoms)
+field=field_outer.difference(field_mask)
+field_parts=list(field.geoms) if hasattr(field,'geoms') else [field];field_saved=[];insets=[]
+for i,part in enumerate(field_parts,1):
+ if not isinstance(part,Polygon) or part.area<.01:continue
+ mesh=trimesh.creation.extrude_polygon(part,.015)
+ if not mesh.is_watertight:
+  clean=from_wkb(to_wkb(part)).buffer(-.0001)
+  pieces=[clean] if clean.geom_type=='Polygon' else [g for g in clean.geoms if g.geom_type=='Polygon' and g.area>1e-6]
+  if not pieces:raise ValueError('Inset erased field component')
+  mesh=trimesh.util.concatenate([trimesh.creation.extrude_polygon(p,.015) for p in pieces]);insets.append(i)
+ if not mesh.is_watertight:raise ValueError('Non-watertight field component')
+ mesh.apply_translation((0,0,.005));add(f'COURTYARD_PARTIAL_SURFACE_{i:02d}_INFERRED_SEAM_CONDITIONAL',mesh,[164,163,155,255]);field_saved.append(i)
+audit['courtyard_partial']={'boundary_seqnos':[14563,14564,47087],'artificial_seam_px':[[field_line[0][0]*12.44,H-field_line[0][1]*12.44],[seam_end[0]*12.44,H-seam_end[1]*12.44]],'outer_area_m2':field_outer.area,'after_selected_exclusions_m2':field.area,'saved_component_indices':field_saved,'insets_0_1mm':insets,'thickness_m_conditional':.015}
+# Nine generic, low markers at visible symbols inside the central circular bed.
+# They indicate placement only; botanical identity and sizes are not supplied.
+central_markers=[(667,299),(642,312),(693,312),(632,335),(667,335),(703,335),(642,361),(693,361),(667,371)]
+from shapely.geometry import Point
+for i,(px,py) in enumerate(central_markers,1):
+ x,y=px/12.44,(H-py)/12.44
+ pt=Point(x,y)
+ assert fills['GREEN_FILL'].covers(pt) and inner.contains(pt),f'Central plant {i} outside selected green circle'
+ shrub=trimesh.creation.icosphere(subdivisions=2,radius=1);shrub.apply_scale([.34,.34,.28]);shrub.apply_translation((x,y,.30))
+ add(f'CENTRAL_PLANT_SYMBOL_{i:02d}_TYPE_AND_HEIGHT_CONDITIONAL',shrub,[110,151,88,255])
+audit['central_plant_symbols']={'centers_in_normalized_image_pixels':central_markers,'radius_m_conditional':.34,'approx_height_m_conditional':.58}
+
 # Approximate centers from repeated, visible tree symbols on the two streets.
 # The morphology and height are solely neutral placeholders, not a species choice.
 tree_pixels=[(34,996),(99,996),(163,996),(230,996),(301,996),(365,996),(428,996),(490,996),(552,996),(615,996),(676,996),(801,996),(863,996),(926,996),(988,996),(1054,996),(1148,996),(1210,996),(1273,996),(1335,996),(1397,996),(1459,996)]+[(1474,y) for y in (328,392,452,514,578,639,700,765,827,889)]
@@ -162,8 +210,8 @@ for i,(px,py) in enumerate(tree_pixels,1):
  crown=trimesh.creation.icosphere(subdivisions=2,radius=1);crown.apply_scale([1.1,1.1,1.0]);crown.apply_translation((x,y,2.05));crown.visual.face_colors=[87,137,74,255]
  tree=trimesh.util.concatenate([trunk,crown]);add(f'TREE_SYMBOL_{i:02d}_LOCATION_APPROX_HEIGHT_AND_TYPE_CONDITIONAL',tree)
 audit['tree_symbols']={'count':len(tree_pixels),'centers_in_normalized_image_pixels':tree_pixels,'crown_radius_m_conditional':1.1,'approx_height_m_conditional':3.05}
-(R/'public/model/reconstruction_02_audit.json').write_text(json.dumps(audit,ensure_ascii=False,indent=2))
+(R/'public/model/reconstruction_03_audit.json').write_text(json.dumps(audit,ensure_ascii=False,indent=2))
 # Blender's Z-up to glTF Y-up conversion.
 s.apply_transform(trimesh.transformations.rotation_matrix(-np.pi/2,[1,0,0]))
-out=R/'public/model/palladium_reconstruction_02.glb';s.export(out)
+out=R/'public/model/palladium_reconstruction_03.glb';s.export(out)
 print('Saved',out,'nodes',len(s.graph.nodes_geometry),'bounds',s.bounds.tolist())

@@ -2,21 +2,23 @@
 from pathlib import Path
 import numpy as np
 import trimesh
-path=Path(__file__).resolve().parent.parent/'public/model/palladium_reconstruction_02.glb'
+path=Path(__file__).resolve().parent.parent/'public/model/palladium_reconstruction_03.glb'
 s=trimesh.load(path,force='scene')
 names=list(s.graph.nodes_geometry)
 assert len([n for n in names if n.startswith('BUILDING_')])==6
 assert len([n for n in names if n.startswith('TREE_SYMBOL_')])==32
 assert len([n for n in names if n.startswith('CURB_')])==13
-assert len([n for n in names if n.startswith('BED_EDGE_')])==7
+assert len([n for n in names if n.startswith('BED_EDGE_')])==8
+assert len([n for n in names if n.startswith('CENTRAL_PLANT_')])==9
+assert len([n for n in names if n.startswith('COURTYARD_PARTIAL_')])==2
 assert len([n for n in names if n.startswith('PDF_FILL_')])==7
 for n in names:
  mat,g=s.graph[n];m=s.geometry[g]
- if n.startswith(('BUILDING_','CURB_','BED_EDGE_','CENTRAL_','PLAY_SYMBOL_')):assert m.is_watertight,n
+ if n.startswith(('BUILDING_','CURB_','BED_EDGE_','CENTRAL_','PLAY_SYMBOL_','COURTYARD_PARTIAL_')):assert m.is_watertight,n
  if n.startswith('PDF_FILL_'):
   v=trimesh.transform_points(m.vertices,mat);f=m.faces
   # glTF Y-up: graphic planes should be visible from above.
   normals=np.cross(v[f[:,1]]-v[f[:,0]],v[f[:,2]]-v[f[:,0]])[:,1]
   assert np.all(normals>0),n
-print(f'OK: {len(names)} meshes, 6 building volumes, 20 edge groups, 32 tree symbols and 7 fill groups. Selected solids watertight; fill normals face up.')
+print(f'OK: {len(names)} meshes, 6 building volumes, 21 edge groups, 32 tree symbols, 9 central plant markers, 2 courtyard surface parts and 7 fill groups. Selected solids watertight; fill normals face up.')
 print('No full collision, drainage, clearance, accessibility or safety checks were performed.')
